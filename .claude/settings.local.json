@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake ..)",
+      "Bash(make)",
+      "Bash(cat /home/oscar/Desktop/DemoPI/DemoProyectoPI/build/output/json/*.json)",
+      "Bash(python3)",
+      "Bash(find /c/Users/oscar/Downloads/DemoProyectoPI -type f \\\\\\(-name *.h -o -name *.cpp -o -name *.py -o -name *.csv \\\\\\))",
+      "Bash(chmod +x \"C:/Users/oscar/Downloads/DemoProyectoPI/ejecutar.sh\")"
+    ]
+  }
+}

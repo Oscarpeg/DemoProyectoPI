@@ -1,0 +1,20 @@
+{
+  "fondos": [],
+  "renta_fija": [],
+  "resumen": {
+    "activos": {},
+    "asesor": "",
+    "ciudad": "",
+    "direccion": "",
+    "email_asesor": "",
+    "fecha_extracto": "",
+    "nit": "",
+    "nombre_cliente": "",
+    "pasivos": {},
+    "telefono": "",
+    "total_activos": 0.0,
+    "total_pasivos": 0.0,
+    "total_portafolio": 0.0
+  },
+  "saldos_efectivo": []
+}

@@ -1,0 +1,8 @@
+build/
+Resultados/
+*.png
+*.o
+.claude/
+GUIA_COMPLETA.md
+pdfs/
+resultados/

@@ -1,0 +1,30 @@
+# ============================================================
+# docker-compose.yml - ProyectoPI
+#
+# USO:
+#   Modo consola:  docker compose run proyecto ./ProyectoPI mi_extracto.pdf
+#   Modo GUI:      docker compose up proyecto-gui
+# ============================================================
+services:
+  # --- Modo consola (procesar PDF sin interfaz) ---
+  proyecto:
+    build: .
+    volumes:
+      # Montar carpeta de PDFs de entrada
+      - ./pdfs:/app/build/pdfs
+      # Montar carpeta de salida para acceder a resultados
+      - ./resultados:/app/build/output
+    entrypoint: ["./ProyectoPI"]
+
+  # --- Modo GUI (requiere X11) ---
+  proyecto-gui:
+    build: .
+    volumes:
+      - ./pdfs:/app/build/pdfs
+      - ./resultados:/app/build/output
+      # X11 socket para mostrar ventana gráfica
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    environment:
+      - DISPLAY=${DISPLAY}
+    entrypoint: ["./ProyectoPI"]
+    network_mode: host
