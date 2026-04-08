@@ -11,7 +11,7 @@ find_package(wxWidgets REQUIRED COMPONENTS core base adv)
 include(${wxWidgets_USE_FILE})
 
 # nlohmann-json (del sistema: apt install nlohmann-json3-dev)
-find_package(nlohmann_json 3.11 REQUIRED)
+find_package(nlohmann_json 3.10 REQUIRED)
 
 # --- Fuentes ---
 set(SOURCES
