@@ -1,0 +1,20 @@
+# Build
+build/
+
+# Output
+output/
+pdfs/
+resultados/
+
+# IDE
+.vscode/
+.idea/
+compile_commands.json
+
+# OS
+.DS_Store
+*.swp
+*~
+
+# Claude
+.claude/

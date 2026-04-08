@@ -9,6 +9,7 @@ services:
   # --- Modo consola (procesar PDF sin interfaz) ---
   proyecto:
     build: .
+    image: proyectopi:latest
     volumes:
       # Montar carpeta de PDFs de entrada
       - ./pdfs:/app/build/pdfs
@@ -19,6 +20,7 @@ services:
   # --- Modo GUI (requiere X11) ---
   proyecto-gui:
     build: .
+    image: proyectopi:latest
     volumes:
       - ./pdfs:/app/build/pdfs
       - ./resultados:/app/build/output

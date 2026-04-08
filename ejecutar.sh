@@ -29,7 +29,7 @@ if ! command -v docker &> /dev/null; then
 fi
 
 # Construir imagen si no existe
-if ! docker images | grep -q "demoproyectopi"; then
+if ! docker images | grep -q "proyectopi"; then
     echo -e "${YELLOW}[1/2] Construyendo imagen Docker (primera vez, ~10-15 min)...${NC}"
     docker compose build
     echo -e "${GREEN}Imagen construida exitosamente.${NC}"

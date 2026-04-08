@@ -1,3 +1,0 @@
-/home/oscar/Desktop/DemoPI/DemoProyectoPI/build/CMakeFiles/ProyectoPI.dir
-/home/oscar/Desktop/DemoPI/DemoProyectoPI/build/CMakeFiles/edit_cache.dir
-/home/oscar/Desktop/DemoPI/DemoProyectoPI/build/CMakeFiles/rebuild_cache.dir
