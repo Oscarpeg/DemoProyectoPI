@@ -101,6 +101,17 @@ int runConsole(const std::string& pdf_path, const std::string& password) {
     DataStructurer structurer;
     ExtractoCompleto extracto;
 
+    // Modelo AI: se verifica una sola vez antes del loop.
+    // El fallback al metodo morfologico/OCR solo se activa si el archivo
+    // no existe — no si el modelo carga pero no detecta nada en una pagina.
+    const std::string MODEL_PATH  = "models/tabla_detector.onnx";
+    const bool        model_available = fs::exists(MODEL_PATH);
+    if (model_available)
+        std::cout << "  [AI] Modelo cargado: " << MODEL_PATH << "\n";
+    else
+        std::cout << "  [AI] Modelo no encontrado (" << MODEL_PATH
+                  << "). Usando deteccion OCR.\n";
+
     for (size_t i = 0; i < images.size(); ++i) {
         int page_num = static_cast<int>(i + 1);
         std::cout << "\n--- Pagina " << page_num << " ---" << std::endl;
@@ -171,40 +182,94 @@ int runConsole(const std::string& pdf_path, const std::string& password) {
                 std::cout << "  Extrayendo OCR de pagina completa..." << std::endl;
                 auto ocr_data = ocr.extractAll(img);
 
-                // Detectar tablas desde bounding boxes del OCR (no morfologia)
-                std::cout << "  Detectando tablas desde datos OCR..." << std::endl;
-                auto ocr_tables = structurer.detectTablesFromOCR(ocr_data, img.cols);
+                if (model_available) {
+                    // ── Flujo AI (primario) ───────────────────────────────
+                    // El modelo devuelve detecciones con class_id, lo que
+                    // elimina la necesidad de clasificar la tabla por OCR.
+                    // Mapeo de clases del dataset:
+                    //   0=tabla_renta  7=tabla_saldos  (relevantes aqui)
+                    //   titulos (2,5,6) se ignoran en esta etapa
+                    std::cout << "  [AI] Detectando regiones de tabla..." << std::endl;
+                    auto ai_dets = table_det.detectWithAI(img, MODEL_PATH);
 
-                for (size_t t = 0; t < ocr_tables.size(); ++t) {
-                    const auto& tbl = ocr_tables[t];
-                    std::cout << "  Tabla " << (t + 1) << ": tipo=" << tbl.type
-                              << ", " << tbl.rows.size() << " filas" << std::endl;
+                    for (const auto& det : ai_dets) {
+                        cv::Rect safe = det.rect &
+                                        cv::Rect(0, 0, img.cols, img.rows);
+                        if (safe.width < 10 || safe.height < 10) continue;
 
-                    auto grid = structurer.ocrTableToGrid(tbl);
+                        cv::Mat region  = img(safe);
+                        auto region_ocr = ocr.extractAll(region);
 
-                    if (tbl.type == "renta_fija") {
-                        auto rf = structurer.buildRentaFija(grid);
-                        if (!rf.empty()) {
-                            extracto.renta_fija.insert(extracto.renta_fija.end(),
-                                                        rf.begin(), rf.end());
-                            std::cout << "  -> " << rf.size() << " instrumentos RF" << std::endl;
+                        if (det.class_id == 0) {
+                            // tabla_renta → instrumentos de Renta Fija
+                            auto ocr_tbls = structurer.detectTablesFromOCR(
+                                                region_ocr, region.cols);
+                            for (const auto& tbl : ocr_tbls) {
+                                auto grid = structurer.ocrTableToGrid(tbl);
+                                auto rf   = structurer.buildRentaFija(grid);
+                                if (!rf.empty()) {
+                                    extracto.renta_fija.insert(
+                                        extracto.renta_fija.end(),
+                                        rf.begin(), rf.end());
+                                    std::cout << "  [AI] tabla_renta -> "
+                                              << rf.size() << " instrumentos RF\n";
+                                }
+                            }
+                        } else if (det.class_id == 7) {
+                            // tabla_saldos → saldos en efectivo
+                            auto ocr_tbls = structurer.detectTablesFromOCR(
+                                                region_ocr, region.cols);
+                            for (const auto& tbl : ocr_tbls) {
+                                auto grid   = structurer.ocrTableToGrid(tbl);
+                                auto saldos = structurer.buildSaldosEfectivo(grid);
+                                extracto.saldos_efectivo.insert(
+                                    extracto.saldos_efectivo.end(),
+                                    saldos.begin(), saldos.end());
+                                std::cout << "  [AI] tabla_saldos -> "
+                                          << saldos.size() << " saldos\n";
+                            }
                         }
-                    } else if (tbl.type == "saldos") {
-                        auto saldos = structurer.buildSaldosEfectivo(grid);
-                        extracto.saldos_efectivo.insert(extracto.saldos_efectivo.end(),
-                                                         saldos.begin(), saldos.end());
-                        std::cout << "  -> " << saldos.size() << " saldos" << std::endl;
+                        // titulos (class 2,5,6) → ignorar en extraccion
                     }
-                    // fic_resumen y unknown se procesan con el OCR completo si es necesario
+                } else {
+                    // ── Flujo OCR (fallback: modelo no instalado) ─────────
+                    std::cout << "  Detectando tablas desde datos OCR..." << std::endl;
+                    auto ocr_tables = structurer.detectTablesFromOCR(
+                                          ocr_data, img.cols);
+
+                    for (size_t t = 0; t < ocr_tables.size(); ++t) {
+                        const auto& tbl = ocr_tables[t];
+                        std::cout << "  Tabla " << (t + 1) << ": tipo=" << tbl.type
+                                  << ", " << tbl.rows.size() << " filas\n";
+                        auto grid = structurer.ocrTableToGrid(tbl);
+                        if (tbl.type == "renta_fija") {
+                            auto rf = structurer.buildRentaFija(grid);
+                            if (!rf.empty()) {
+                                extracto.renta_fija.insert(
+                                    extracto.renta_fija.end(),
+                                    rf.begin(), rf.end());
+                                std::cout << "  -> " << rf.size()
+                                          << " instrumentos RF\n";
+                            }
+                        } else if (tbl.type == "saldos") {
+                            auto saldos = structurer.buildSaldosEfectivo(grid);
+                            extracto.saldos_efectivo.insert(
+                                extracto.saldos_efectivo.end(),
+                                saldos.begin(), saldos.end());
+                            std::cout << "  -> " << saldos.size() << " saldos\n";
+                        }
+                    }
                 }
 
-                // FALLBACK: si no se encontraron instrumentos RF, usar lineas visuales
+                // Fallback final: si no se extrajeron instrumentos RF por
+                // ninguna via, intentar desde lineas visuales del OCR completo
                 if (extracto.renta_fija.empty()) {
-                    std::cout << "  Fallback: extrayendo RF desde lineas visuales..." << std::endl;
+                    std::cout << "  Fallback lineas: extrayendo RF...\n";
                     auto rf = structurer.buildRentaFijaFromLines(ocr_data);
                     extracto.renta_fija.insert(extracto.renta_fija.end(),
                                                 rf.begin(), rf.end());
-                    std::cout << "  Fallback: " << rf.size() << " instrumentos extraidos" << std::endl;
+                    std::cout << "  Fallback: " << rf.size()
+                              << " instrumentos extraidos\n";
                 }
                 break;
             }

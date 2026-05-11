@@ -50,6 +50,14 @@ WORKDIR /app/build
 # Crear directorios de salida
 RUN mkdir -p output/images output/graphs output/csv output/json
 
+# --- 5. Modelo AI (YOLOv8n ONNX) ---
+# Copiar models/ al directorio de trabajo del ejecutable.
+# Si tabla_detector.onnx no existe todavia, el sistema arranca igual
+# usando el detector morfologico de OpenCV como fallback.
+# Para activar la IA: colocar tabla_detector.onnx en models/ y reconstruir.
+RUN mkdir -p /app/build/models
+COPY models/ /app/build/models/
+
 # Puerto por si se necesita en el futuro
 EXPOSE 8080
 

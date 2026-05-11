@@ -1,7 +1,9 @@
 #include "table_detector.h"
 #include <algorithm>
 #include <iostream>
+#include <iomanip>
 #include <cmath>
+#include <filesystem>
 
 cv::Mat TableDetector::detectHorizontalLines(const cv::Mat& binary, int min_length) {
     cv::Mat inverted;
@@ -211,4 +213,129 @@ std::vector<TableGrid> TableDetector::detectAllTables(const cv::Mat& input) {
 
     std::cout << "[TableDetector] " << tables.size() << " tablas detectadas" << std::endl;
     return tables;
+}
+
+// ============================================================
+// detectWithAI — YOLOv8n via cv::dnn (ONNX)
+// ============================================================
+std::vector<AIDetection> TableDetector::detectWithAI(
+    const cv::Mat& input,
+    const std::string& model_path,
+    float conf_thr) {
+
+    // Verificar que el archivo del modelo existe antes de intentar cargarlo
+    if (!std::filesystem::exists(model_path)) {
+        std::cout << "[TableDetector] Modelo AI no encontrado: " << model_path
+                  << ". Usando deteccion morfologica." << std::endl;
+        return {};
+    }
+
+    // Cargar red. cv::dnn cachea internamente si se llama varias veces
+    // con el mismo path, pero aqui lo cargamos cada llamada para simplicidad.
+    cv::dnn::Net net;
+    try {
+        net = cv::dnn::readNetFromONNX(model_path);
+    } catch (const cv::Exception& e) {
+        std::cerr << "[TableDetector] Error cargando modelo ONNX: "
+                  << e.what() << std::endl;
+        return {};
+    }
+    net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+    net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+
+    // Factores de escala para volver al tamaño original
+    const int   INPUT_SIZE = 640;
+    float scale_x = static_cast<float>(input.cols) / INPUT_SIZE;
+    float scale_y = static_cast<float>(input.rows) / INPUT_SIZE;
+
+    // Preprocesar: resize a 640x640, normalizar a [0,1], BGR→RGB
+    cv::Mat blob;
+    cv::dnn::blobFromImage(input, blob, 1.0 / 255.0,
+                            cv::Size(INPUT_SIZE, INPUT_SIZE),
+                            cv::Scalar(), true, false);
+    net.setInput(blob);
+
+    // Inferencia
+    cv::Mat raw;
+    try {
+        raw = net.forward();
+    } catch (const cv::Exception& e) {
+        std::cerr << "[TableDetector] Error en inferencia: "
+                  << e.what() << std::endl;
+        return {};
+    }
+
+    // Normalizar layout de salida:
+    // YOLOv8 ONNX: raw = [1, 4+nc, 8400]  (nc=1 → [1, 5, 8400])
+    //   dim[1] < dim[2] → necesita transpose → [8400, 5]
+    // YOLOv5 ONNX: raw = [1, 8400, 5+nc]
+    //   dim[1] > dim[2] → directo
+    cv::Mat out = raw.reshape(1, raw.size[1]);  // quitar dim batch → [5, 8400] o [8400, 5]
+    bool needs_transpose = (out.rows < out.cols);  // YOLOv8: rows=5 < cols=8400
+    if (needs_transpose) {
+        cv::transpose(out, out);  // [5, 8400] → [8400, 5]
+    }
+
+    // Parsear detecciones: cada fila = [cx, cy, w, h, conf, cls0, cls1, ...]
+    // Con 12 clases: out.cols = 4 + 12 = 16 columnas por deteccion
+    int num_classes = out.cols - 5;  // columnas de clase
+
+    std::vector<cv::Rect> boxes;
+    std::vector<float>    scores;
+    std::vector<int>      class_ids;
+
+    for (int i = 0; i < out.rows; ++i) {
+        // Confianza de objeto (col 4)
+        float obj_conf = out.at<float>(i, 4);
+        if (obj_conf < conf_thr) continue;
+
+        // Clase con mayor score
+        int   best_cls   = 0;
+        float best_score = 0.0f;
+        if (num_classes > 0) {
+            for (int c = 0; c < num_classes; ++c) {
+                float s = out.at<float>(i, 5 + c) * obj_conf;
+                if (s > best_score) { best_score = s; best_cls = c; }
+            }
+        } else {
+            best_score = obj_conf;  // modelo de 1 clase sin cols extra
+        }
+        if (best_score < conf_thr) continue;
+
+        float cx = out.at<float>(i, 0) * scale_x;
+        float cy = out.at<float>(i, 1) * scale_y;
+        float w  = out.at<float>(i, 2) * scale_x;
+        float h  = out.at<float>(i, 3) * scale_y;
+
+        int x1 = std::max(0, static_cast<int>(cx - w / 2.0f));
+        int y1 = std::max(0, static_cast<int>(cy - h / 2.0f));
+        int x2 = std::min(input.cols, static_cast<int>(cx + w / 2.0f));
+        int y2 = std::min(input.rows, static_cast<int>(cy + h / 2.0f));
+
+        if (x2 > x1 && y2 > y1) {
+            boxes.push_back(cv::Rect(x1, y1, x2 - x1, y2 - y1));
+            scores.push_back(best_score);
+            class_ids.push_back(best_cls);
+        }
+    }
+
+    // NMS por clase: evitar que detecciones de clases distintas se eliminen entre si
+    std::vector<int> indices;
+    cv::dnn::NMSBoxes(boxes, scores, conf_thr, 0.45f, indices);
+
+    std::vector<AIDetection> result;
+    result.reserve(indices.size());
+    for (int idx : indices) {
+        result.push_back({boxes[idx], class_ids[idx], scores[idx]});
+    }
+
+    std::cout << "[TableDetector] AI: " << result.size()
+              << " deteccion(es) (conf>=" << conf_thr << ")" << std::endl;
+    for (const auto& d : result) {
+        std::cout << "  class=" << d.class_id
+                  << " conf=" << std::fixed << std::setprecision(2) << d.confidence
+                  << " rect=(" << d.rect.x << "," << d.rect.y
+                  << " " << d.rect.width << "x" << d.rect.height << ")\n";
+    }
+    return result;
 }

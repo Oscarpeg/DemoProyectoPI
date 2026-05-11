@@ -492,6 +492,14 @@ void MainFrame::processExtracto() {
         DataStructurer structurer;
         ExtractoCompleto extracto;
 
+        const std::string MODEL_PATH   = "models/tabla_detector.onnx";
+        const bool        model_available = fs::exists(MODEL_PATH);
+        CallAfter([this, model_available, MODEL_PATH]() {
+            logMessage(model_available
+                ? "[AI] Modelo cargado: " + MODEL_PATH
+                : "[AI] Modelo no encontrado. Usando deteccion OCR.");
+        });
+
         const int num_pages = static_cast<int>(images.size());
 
         // 3. Procesar cada pagina
@@ -556,41 +564,83 @@ void MainFrame::processExtracto() {
                     break;
                 }
                 case PageType::DETALLE_RENTA_FIJA: {
-                    // Extraer OCR de pagina completa
                     auto ocr_data = ocr.extractAll(img);
 
-                    // Detectar tablas desde bounding boxes del OCR
-                    auto ocr_tables = structurer.detectTablesFromOCR(ocr_data, img.cols);
-                    std::string tbl_msg = "  " + std::to_string(ocr_tables.size()) +
-                                          " tablas detectadas (OCR)";
-                    CallAfter([this, tbl_msg]() { logMessage(tbl_msg); });
+                    if (model_available) {
+                        // ── Flujo AI (primario) ──────────────────────────
+                        CallAfter([this]() { logMessage("  [AI] Detectando regiones..."); });
+                        auto ai_dets = table_det.detectWithAI(img, MODEL_PATH);
 
-                    for (size_t t = 0; t < ocr_tables.size(); ++t) {
-                        const auto& tbl = ocr_tables[t];
-                        std::string grid_msg = "  Tabla " + std::to_string(t + 1) +
-                                               ": tipo=" + tbl.type +
-                                               ", " + std::to_string(tbl.rows.size()) + " filas";
-                        CallAfter([this, grid_msg]() { logMessage(grid_msg); });
+                        std::string det_msg = "  [AI] " + std::to_string(ai_dets.size()) +
+                                              " deteccion(es)";
+                        CallAfter([this, det_msg]() { logMessage(det_msg); });
 
-                        auto grid = structurer.ocrTableToGrid(tbl);
+                        for (const auto& det : ai_dets) {
+                            cv::Rect safe = det.rect &
+                                            cv::Rect(0, 0, img.cols, img.rows);
+                            if (safe.width < 10 || safe.height < 10) continue;
 
-                        if (tbl.type == "renta_fija") {
-                            auto rf = structurer.buildRentaFija(grid);
-                            if (!rf.empty()) {
-                                extracto.renta_fija.insert(extracto.renta_fija.end(),
-                                                            rf.begin(), rf.end());
+                            cv::Mat region    = img(safe);
+                            auto region_ocr   = ocr.extractAll(region);
+
+                            if (det.class_id == 0) {
+                                // tabla_renta
+                                auto tbls = structurer.detectTablesFromOCR(
+                                                region_ocr, region.cols);
+                                for (const auto& tbl : tbls) {
+                                    auto grid = structurer.ocrTableToGrid(tbl);
+                                    auto rf   = structurer.buildRentaFija(grid);
+                                    if (!rf.empty()) {
+                                        extracto.renta_fija.insert(
+                                            extracto.renta_fija.end(),
+                                            rf.begin(), rf.end());
+                                        std::string m = "  [AI] tabla_renta -> " +
+                                            std::to_string(rf.size()) + " instrumentos RF";
+                                        CallAfter([this, m]() { logMessage(m); });
+                                    }
+                                }
+                            } else if (det.class_id == 7) {
+                                // tabla_saldos
+                                auto tbls = structurer.detectTablesFromOCR(
+                                                region_ocr, region.cols);
+                                for (const auto& tbl : tbls) {
+                                    auto grid   = structurer.ocrTableToGrid(tbl);
+                                    auto saldos = structurer.buildSaldosEfectivo(grid);
+                                    extracto.saldos_efectivo.insert(
+                                        extracto.saldos_efectivo.end(),
+                                        saldos.begin(), saldos.end());
+                                }
                             }
-                        } else if (tbl.type == "saldos") {
-                            auto saldos = structurer.buildSaldosEfectivo(grid);
-                            extracto.saldos_efectivo.insert(extracto.saldos_efectivo.end(),
-                                                             saldos.begin(), saldos.end());
+                        }
+                    } else {
+                        // ── Flujo OCR (fallback: modelo no instalado) ────
+                        auto ocr_tables = structurer.detectTablesFromOCR(
+                                              ocr_data, img.cols);
+                        std::string tbl_msg = "  " +
+                            std::to_string(ocr_tables.size()) + " tablas (OCR)";
+                        CallAfter([this, tbl_msg]() { logMessage(tbl_msg); });
+
+                        for (const auto& tbl : ocr_tables) {
+                            auto grid = structurer.ocrTableToGrid(tbl);
+                            if (tbl.type == "renta_fija") {
+                                auto rf = structurer.buildRentaFija(grid);
+                                if (!rf.empty())
+                                    extracto.renta_fija.insert(
+                                        extracto.renta_fija.end(),
+                                        rf.begin(), rf.end());
+                            } else if (tbl.type == "saldos") {
+                                auto saldos = structurer.buildSaldosEfectivo(grid);
+                                extracto.saldos_efectivo.insert(
+                                    extracto.saldos_efectivo.end(),
+                                    saldos.begin(), saldos.end());
+                            }
                         }
                     }
 
-                    // FALLBACK: si no se encontraron instrumentos RF, usar lineas visuales
+                    // Fallback final si no hay RF por ninguna vía
                     if (extracto.renta_fija.empty()) {
                         CallAfter([this]() {
-                            logMessage("  Fallback: extrayendo RF desde lineas visuales...");
+                            logMessage("  Fallback lineas: extrayendo RF...");
                         });
                         auto rf = structurer.buildRentaFijaFromLines(ocr_data);
                         extracto.renta_fija.insert(extracto.renta_fija.end(),

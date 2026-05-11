@@ -25,3 +25,9 @@ compile_commands.json
 
 # Claude
 .claude/
+
+# AI: solo subir scripts y modelo, NO el dataset ni pesos de entrenamiento
+ai/dataset/
+dataset.zip
+yolov8n.pt
+*.pt
